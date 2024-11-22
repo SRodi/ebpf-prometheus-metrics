@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xdp-prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xdp-prometheus
+  template:
+    metadata:
+      labels:
+        app: xdp-prometheus
+    spec:
+      containers:
+      - name: xdp-prometheus
+        image: xdp-prometheus:latest
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+        ports:
+        - containerPort: 8080
