@@ -7,7 +7,7 @@ build:
 	go build -o main main.go
 
 clean:
-	rm -f main xdp_prog.o
+	rm -f main xdp_ebpf.o
 
 docker:
-	docker build -t xdp-prometheus .
+	docker build -t ghcr.io/srodi/ebpf-prometheus-metrics/xdp-prometheus .

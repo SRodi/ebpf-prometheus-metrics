@@ -7,15 +7,22 @@ COPY . .
 # install Linux kernel headers
 RUN apt-get update && apt-get install -y libbpf-dev
 RUN go mod download
-RUN go build -o main .
+# RUN go build -o main .
 
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 
 WORKDIR /root/
 
 COPY --from=builder /app/main .
 COPY xdp_ebpf.c .
+COPY xdp_ebpf.o .
 
 RUN apt-get update && apt-get install -y clang llvm iproute2 libbpf-dev
+
+# Ensure the container runs as root
+USER root
+
+# Export metrics port
+EXPOSE 8080
 
 CMD ["./main"]

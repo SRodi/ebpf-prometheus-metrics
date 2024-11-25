@@ -92,29 +92,31 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	// Goroutine to handle graceful shutdown on receiving a signal
-	go func() {
-		<-sig
-		link.Close()
-		reader.Close()
-		os.Exit(0)
-	}()
-
 	go func() {
 		for {
-			record, err := reader.Read()
-			if err != nil {
-				log.Printf("failed to read from perf reader: %v", err)
-				continue
-			}
+			select {
+			case <-sig:
+				// Handle graceful shutdown on SIGINT and SIGTERM
+				log.Println("Shutting down...")
+				link.Close()
+				reader.Close()
+				os.Exit(0)
+			default:
+				// Read from perf event reader
+				record, err := reader.Read()
+				if err != nil {
+					log.Printf("failed to read from perf reader: %v", err)
+					continue
+				}
 
-			if record.LostSamples > 0 {
-				log.Printf("lost %d samples", record.LostSamples)
-				continue
-			}
+				if record.LostSamples > 0 {
+					log.Printf("lost %d samples", record.LostSamples)
+					continue
+				}
 
-			// Update Prometheus metrics based on the event data
-			updateMetrics("ifaceName")
+				// Update Prometheus metrics based on the event data
+				updateMetrics("ifaceName")
+			}
 		}
 	}()
 
