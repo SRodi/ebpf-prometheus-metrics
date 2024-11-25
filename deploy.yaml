@@ -13,7 +13,7 @@ spec:
     spec:
       containers:
       - name: xdp-prometheus
-        image: ghcr.io/srodi/ebpf-prometheus-metrics/xdp-prometheus@sha256:1804962a86d2e9de16524f722877b55a22c77e7dace822a20f94788ba8b786cf
+        image: ghcr.io/srodi/ebpf-prometheus-metrics/xdp-prometheus:157c437
         resources:
           limits:
             memory: "512Mi"
