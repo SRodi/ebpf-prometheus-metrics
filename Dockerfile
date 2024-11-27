@@ -14,8 +14,8 @@ FROM ubuntu:22.04
 WORKDIR /root/
 
 COPY --from=builder /app/main .
-COPY xdp_ebpf.c .
-COPY xdp_ebpf.o .
+COPY bpf/xdp_ebpf.c ./bpf/
+COPY bpf/xdp_ebpf.o ./bpf/
 
 RUN apt-get update && apt-get install -y clang llvm iproute2 libbpf-dev
 

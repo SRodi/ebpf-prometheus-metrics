@@ -67,5 +67,18 @@ Once deployed, the metrics will be exposed on port 8080 of the xdp-prometheus se
 
 ![Prometheus](prometheus.png)
 
+If Prometheus is not configured to scrape from the `default` namespace, a job needs to be added to Prometheus `scrape_config`:
+
+```yaml
+scrape_configs:
+  - job_name: 'kubernetes-service-endpoints'
+    kubernetes_sd_configs:
+      - role: endpoints
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_namespace]
+        action: keep
+        regex: defaul
+```
+
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details.

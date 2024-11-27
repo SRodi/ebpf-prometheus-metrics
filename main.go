@@ -1,7 +1,7 @@
 package main
 
 /*
-#include "xdp_ebpf.c"
+#include "bpf/xdp_ebpf.c"
 */
 import "C"
 import (
@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	bpfFilePath  = "./xdp_ebpf.o"
+	bpfFilePath  = "./bpf/xdp_ebpf.o"
 	bpfProgName  = "xdp_prog"
 	memLockLimit = 64 * 1024 * 1024 // 64 MiB
 )
