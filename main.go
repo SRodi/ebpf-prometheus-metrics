@@ -1,5 +1,9 @@
 package main
 
+/*
+#include "bpf/xdp_ebpf.c"
+*/
+import "C"
 import (
 	"encoding/binary"
 	"log"
@@ -14,11 +18,7 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-) /*
-#include "bpf/xdp_ebpf.c"
-*/
-
-import "C"
+)
 
 const (
 	bpfFilePath  = "./bpf/xdp_ebpf.o"

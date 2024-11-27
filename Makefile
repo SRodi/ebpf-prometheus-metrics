@@ -22,6 +22,9 @@ docker:
 	docker build -t $(IMAGE) .
 	docker push $(IMAGE)
 
+docker-run:
+	docker run --cap-add=SYS_ADMIN  -p 8080:8080 $(IMAGE)
+
 deploy:
 	envsubst < deploy/deploy.yaml.tmpl | kubectl apply -f -
 

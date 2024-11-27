@@ -58,10 +58,11 @@ SEC("xdp") int ddos_protection(struct xdp_md *ctx) {
         }
     } else {
         // Initialize rate limit entry for new IP
-        struct rate_limit_entry new_entry = {
-            .last_update = current_time,
-            .packet_count = 1,
-        };
+        struct rate_limit_entry new_entry;
+        // Zero out padding bytes
+        __builtin_memset(&new_entry, 0, sizeof(new_entry));
+        new_entry.last_update = current_time;
+        new_entry.packet_count = 1;
         bpf_map_update_elem(&rate_limit_map, &src_ip, &new_entry, BPF_ANY);
     }
     return XDP_PASS; // Allow packet if under threshold   
