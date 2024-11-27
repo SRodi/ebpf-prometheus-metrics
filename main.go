@@ -1,10 +1,7 @@
 package main
 
-/*
-#include "bpf/xdp_ebpf.c"
-*/
-import "C"
 import (
+	"encoding/binary"
 	"log"
 	"net"
 	"net/http"
@@ -14,39 +11,43 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
-	"github.com/cilium/ebpf/perf"
+	"github.com/cilium/ebpf/rlimit"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/sys/unix"
-)
+) /*
+#include "bpf/xdp_ebpf.c"
+*/
+
+import "C"
 
 const (
 	bpfFilePath  = "./bpf/xdp_ebpf.o"
-	bpfProgName  = "xdp_prog"
+	bpfProgName  = "ddos_protection"
 	memLockLimit = 64 * 1024 * 1024 // 64 MiB
 )
 
-var (
-	packets = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "xdp_packets_total",
-			Help: "Total number of packets processed by XDP",
-		},
-		[]string{"interface"},
-	)
+var packets = prometheus.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "xdp_packets_count",
+		Help: "Total number of packets processed by XDP",
+	},
+	[]string{"src_ip"},
 )
+
+type RateLimitEntry struct {
+	LastUpdate  uint64
+	PacketCount uint32
+	// padding to align to 8 bytes
+	_ [4]byte
+}
 
 func init() {
 	prometheus.MustRegister(packets)
 }
 
 func main() {
-	// Set the RLIMIT_MEMLOCK resource limit
-	var rLimit unix.Rlimit
-	rLimit.Cur = memLockLimit
-	rLimit.Max = memLockLimit
-	if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &rLimit); err != nil {
-		log.Fatalf("Failed to set RLIMIT_MEMLOCK: %v", err)
+	if err := rlimit.RemoveMemlock(); err != nil {
+		log.Fatalf("failed to remove memlock: %v", err)
 	}
 
 	// Load the eBPF collection
@@ -75,19 +76,6 @@ func main() {
 	// sudo bpftool link detach id <link_id>
 	defer link.Close()
 
-	// Ensure the "events" map is not nil
-	eventsMap, ok := coll.Maps["events"]
-	if !ok || eventsMap == nil {
-		log.Fatal("eBPF map 'events' is not initialized")
-	}
-
-	// Create a perf reader with options
-	reader, err := perf.NewReaderWithOptions(eventsMap, 4096, perf.ReaderOptions{})
-	if err != nil {
-		log.Fatalf("failed to create perf reader: %v", err)
-	}
-	defer reader.Close()
-
 	// Handle signals for graceful shutdown
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -99,23 +87,20 @@ func main() {
 				// Handle graceful shutdown on SIGINT and SIGTERM
 				log.Println("Shutting down...")
 				link.Close()
-				reader.Close()
 				os.Exit(0)
 			default:
-				// Read from perf event reader
-				record, err := reader.Read()
-				if err != nil {
-					log.Printf("failed to read from perf reader: %v", err)
-					continue
+				// Iterate through the map.
+				it := coll.Maps["rate_limit_map"].Iterate()
+				var key uint32
+				var value RateLimitEntry
+
+				for it.Next(&key, &value) {
+					updateMetrics(key, value)
 				}
 
-				if record.LostSamples > 0 {
-					log.Printf("lost %d samples", record.LostSamples)
-					continue
+				if err := it.Err(); err != nil {
+					log.Fatalf("failed to iterate map: %v", err)
 				}
-
-				// Update Prometheus metrics based on the event data
-				updateMetrics("ifaceName")
 			}
 		}
 	}()
@@ -124,6 +109,14 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func updateMetrics(iface string) {
-	packets.WithLabelValues(iface).Inc()
+func uint32ToIP(nn uint32) net.IP {
+	ip := make(net.IP, 4)
+	binary.LittleEndian.PutUint32(ip, nn)
+	return ip
+}
+
+func updateMetrics(key uint32, value RateLimitEntry) {
+	srcIp := uint32ToIP(key)
+
+	packets.WithLabelValues(srcIp.String()).Set(float64(value.PacketCount))
 }
