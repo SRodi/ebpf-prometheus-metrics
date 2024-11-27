@@ -4,18 +4,21 @@ The xdp-prometheus project is designed to collect eBPF metrics and expose them t
 The repository is structured with various files and directories, including a Dockerfile for building the Docker image, Kubernetes deployment configurations, Go module dependencies, and the main application code written in Go. The eBPF program source code is contained in xdp_ebpf.c, and its compiled output is in xdp_ebpf.o. The project requires Docker, Kubernetes, and Go 1.22.7 or higher to build and run.
 
 The [xdp_ebpf.c](bpf/xdp_ebpf.c) file contains an eBPF program designed for DDoS protection using XDP (eXpress Data Path). It includes necessary Linux kernel headers and defines constants for rate limiting, such as the maximum packets per second (THRESHOLD) and the time window in nanoseconds (TIME_WINDOW_NS). The program maintains a hash map (rate_limit_map) to track the rate limit for each source IP address, storing the last update timestamp and packet count within the time window. The ddos_protection function, marked with the SEC("xdp") section, processes incoming packets, starting by parsing the Ethernet header. It checks if the packet is an IP packet and ensures that the packet data is within bounds before proceeding with further processing. If the packet is not an IP packet or the data is out of bounds, it passes the packet without any action.
+
+![Prometheus](static/ddos_simulation.png)
+
 ## Repository structure
 ```
-.gitignore
-deploy.yaml
-Dockerfile
-go.mod
-go.sum
-main
-main.go
-Makefile
-xdp_ebpf.c
-xdp_ebpf.o
+  . 
+  ├── bpf
+  | └── xdp_ebpf.c
+  ├── deploy 
+  |  └── deploy.yaml.tmpl
+  ├── Dockerfile
+  ├── go.mod
+  ├── go.sum
+  |── main.go
+  └── Makefile
 ```
 
 * deploy.yaml: Kubernetes deployment and service configuration.
