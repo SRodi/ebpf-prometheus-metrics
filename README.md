@@ -11,7 +11,7 @@ The [xdp_ebpf.c](bpf/xdp_ebpf.c) file contains an eBPF program designed for DDoS
 ```
   . 
   ├── bpf
-  | └── xdp_ebpf.c
+  |  └── xdp_ebpf.c
   ├── deploy 
   |  └── deploy.yaml.tmpl
   ├── Dockerfile
@@ -36,6 +36,35 @@ The [xdp_ebpf.c](bpf/xdp_ebpf.c) file contains an eBPF program designed for DDoS
 * Docker
 * Kubernetes
 * Go 1.22.7+
+
+## Installation
+
+1. **Install Go**: Follow the instructions on the [official Go website](https://golang.org/doc/install). In Ubuntu/Debian you can also install go as follows:
+    ```sh
+    sudo apt install golang-go
+    echo 'export GOPATH=$HOME/go' >> ~/.profile
+    echo 'export PATH=$GOPATH/bin:$PATH' >> ~/.profile
+    source ~/.profile
+    ```
+2. **Install clang, llvm, libbpf and make**:
+    ```sh
+    sudo apt-get install clang llvm libbpf-dev make -y
+    ```
+3. **Clone the repository**:
+    ```sh
+    git clone https://github.com/srodi/ebpf-prometheus-metrics.git
+    cd ebpf-ebpf-prometheus-metrics
+    ```
+4. **Add the correct include path**
+    If the header files `types.h` are located in a different directory than `/usr/include/asm`, you can add the include path manually via environment variable `C_INCLUDE_PATH`:
+
+    ```sh
+    # ensure asm/types.h exists in the expected directory
+    find /usr/include -name 'types.h'
+
+    # example for Ubuntu 24.04 x86_64 
+    export C_INCLUDE_PATH=/usr/include/x86_64-linux-gnu
+    ```
 
 ## Building the Project
 To build the project, run:
@@ -99,6 +128,26 @@ INTERFACE="eth0"
 echo "sending 1000 packets to $TARGET_IP"
 hping3 --flood --count 1000 --interface $INTERFACE --destport $TARGET_PORT --syn $TARGET_IP
 echo "done sending 1000"
+```
+
+## Troubleshooting
+
+Try attaching the XDP program manually if `make run` fails with the following message:
+
+```sh
+2024/11/28 07:27:49 failed to attach eBPF program to interface eth0: failed to attach link: create link: operation not supported make: *** [Makefile:16: run] Error 1
+```
+
+If you're encountering an issue with attaching an XDP program to the eth0 interface with a similar error to the following, this is due to Large Receive Offload (LRO) being enabled.
+
+```sh
+$ sudo ip link set dev eth0 xdp obj bpf/xdp_ebpf.o sec xdp
+Error: hv_netvsc: XDP: not support LRO.
+```
+The error message indicates that the hv_netvsc driver does not support XDP when LRO is enabled. To resolve this issue, you need to disable LRO on the eth0 interface before attaching the XDP program. You can do this using the ethtool command:
+
+```sh
+sudo ethtool -K eth0 lro off
 ```
 
 ## License
