@@ -26,3 +26,13 @@ USER root
 EXPOSE 8080
 
 CMD ["./main"]
+
+
+# FROM golang:1.20 as builder
+# WORKDIR /app
+# COPY . .
+# RUN go build -o ebpf-exporter main.go
+
+# FROM debian:bullseye
+# COPY --from=builder /app/ebpf-exporter /ebpf-exporter
+# CMD ["/ebpf-exporter"]

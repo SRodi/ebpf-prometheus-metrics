@@ -1,63 +1,64 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: xdp-prometheus
+  name: ebpf-network-latency
+  labels:
+    app: ebpf-network-latency
 spec:
+  replicas: 1
   selector:
     matchLabels:
-      app: xdp-prometheus
+      app: ebpf-network-latency
   template:
     metadata:
       labels:
-        app: xdp-prometheus
+        app: ebpf-network-latency
     spec:
       containers:
-      - name: xdp-prometheus
-        image: $IMAGE
-        resources:
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
-        ports:
-        - containerPort: 8080
-          name: metrics
-        securityContext:
-          capabilities:
-            add:
-              - SYS_ADMIN
+        - name: ebpf-exporter
+          image: $IMAGE
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN", "SYS_ADMIN", "SYS_PTRACE"]
+            privileged: true
+          volumeMounts:
+            - mountPath: /sys
+              name: sys
+              readOnly: true
+            - mountPath: /proc
+              name: proc
+              readOnly: true
+          ports:
+            - containerPort: 8080
+              name: metrics
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: proc
+          hostPath:
+            path: /proc
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: xdp-prometheus
-  labels:
-    app: xdp-prometheus
+  name: ebpf-network-latency
 spec:
-  selector:
-    app: xdp-prometheus
   ports:
-  - name: metrics
-    port: 8080
-    targetPort: 8080
+    - name: metrics
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: ebpf-network-latency
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: xdp-prometheus
-  labels:
-    app: xdp-prometheus
+  name: ebpf-network-latency
 spec:
   selector:
     matchLabels:
-      app: xdp-prometheus
+      app: ebpf-network-latency
   endpoints:
-  - port: metrics
-    interval: 30s
-    path: /metrics
-    scheme: http
-  namespaceSelector:
-    matchNames:
-    - default
+    - port: metrics
+      interval: 30s

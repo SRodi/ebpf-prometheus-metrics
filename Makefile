@@ -1,7 +1,7 @@
 IMAGE_REGISTRY ?= ghcr.io
 IMAGE_NAMESPACE ?= srodi
 IMAGE_TAG ?= $(shell git describe --tags --always)
-IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/ebpf-prometheus-metrics/xdp-prometheus:$(IMAGE_TAG)
+IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/ebpf-prometheus-metrics/latency-bpf:$(IMAGE_TAG)
 export IMAGE
 
 .PHONY: all build clean docker
@@ -9,14 +9,14 @@ export IMAGE
 all: build
 
 build:
-	clang -O2 -g -target bpf -c bpf/xdp_ebpf.c -o bpf/xdp_ebpf.o
+	clang -O2 -g -target bpf -c bpf/latency_bpf.c -o bpf/latency_bpf.o
 	go build -o main main.go
 
 run: clean build
 	sudo ./main
 
 clean:
-	rm -f main bpf/xdp_ebpf.o
+	rm -f main bpf/latency_bpf.o
 
 docker:
 	docker build -t $(IMAGE) .
