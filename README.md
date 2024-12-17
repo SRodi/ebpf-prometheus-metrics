@@ -1,3 +1,16 @@
+```sh
+# check tracing subsystems events available
+# https://blogs.oracle.com/linux/post/taming-tracepoints-in-the-linux-kernel
+sudo ls /sys/kernel/debug/tracing/events/net
+
+# enable netif_receive_skb tracepoint
+sudo sh -c 'echo -n 1 > /sys/kernel/debug/tracing/events/net/netif_receive_skb/enable'
+
+# enable net_dev_queue tracepoint
+sudo sh -c 'echo -n 1 > /sys/kernel/debug/tracing/events/net/net_dev_queue/enable'
+```
+
+
 # xdp-prometheus
 The xdp-prometheus project is designed to collect eBPF metrics and expose them to Prometheus for monitoring. It includes the source code and deployment configuration necessary to build, run, and deploy the application. The project leverages eBPF programs to gather metrics at the kernel level and uses Prometheus to make these metrics accessible for monitoring and analysis.
 

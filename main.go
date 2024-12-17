@@ -2,138 +2,132 @@ package main
 
 import (
 	"bytes"
-	"context"
-	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net/http"
-	"time"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/perf"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	"golang.org/x/sys/unix"
 )
 
-// Embed the compiled eBPF object file
-//
-//go:embed latency_bpf.o
-var ebpfProgram []byte
+const (
+	bpfProgramPath = "./bpf/latency.o"
+	memLockLimit   = 1000 * 1024 * 1024 // 1GB
+)
 
-// Prometheus metrics
+type LatencyEvent struct {
+	Timestamp uint64
+	SrcIP     uint32
+	DstIP     uint32
+}
+
 var (
-	networkLatency = prometheus.NewHistogramVec(
+	latencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "network_latency_seconds",
-			Help:    "Histogram of network latency with pod names as labels.",
-			Buckets: prometheus.ExponentialBuckets(0.00001, 2, 15), // From 10µs to ~32s
+			Name:    "packet_latency",
+			Help:    "Packet latency in nanoseconds",
+			Buckets: prometheus.LinearBuckets(0, 1000000, 10), // 10 buckets, each 1ms wide
 		},
-		[]string{"src_pod", "dst_pod"},
+		[]string{"src_ip", "dst_ip"},
 	)
-
-	k8sClient *kubernetes.Clientset
 )
 
-func ipToString(ip uint32) string {
-	return fmt.Sprintf("%d.%d.%d.%d", byte(ip), byte(ip>>8), byte(ip>>16), byte(ip>>24))
+func init() {
+	prometheus.MustRegister(latencyHistogram)
 }
 
 func main() {
-	// Initialize Kubernetes client
-	config, err := rest.InClusterConfig()
+	// Set the RLIMIT_MEMLOCK resource limit
+	var rLimit unix.Rlimit
+	rLimit.Cur = memLockLimit
+	rLimit.Max = memLockLimit
+	if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &rLimit); err != nil {
+		log.Fatalf("Failed to set RLIMIT_MEMLOCK: %v", err)
+	}
+
+	// Parse the ELF file containing the BPF program
+	spec, err := ebpf.LoadCollectionSpec(bpfProgramPath)
 	if err != nil {
-		log.Fatalf("Failed to create Kubernetes client config: %v", err)
+		log.Fatalf("Failed to load BPF program: %v", err)
 	}
-	k8sClient, err = kubernetes.NewForConfig(config)
+
+	// Load the BPF program into the kernel
+	coll, err := ebpf.NewCollection(spec)
 	if err != nil {
-		log.Fatalf("Failed to create Kubernetes client: %v", err)
+		log.Fatalf("Failed to create BPF collection: %v", err)
 	}
+	defer coll.Close()
 
-	// Load the eBPF program
-	spec, err := ebpf.LoadCollectionSpecFromReader(bytes.NewReader(ebpfProgram))
+	// Attach BPF programs to receive tracepoint events
+	tp_rcv, err := link.Tracepoint("net", "netif_receive_skb", coll.Programs["trace_ip"], nil)
 	if err != nil {
-		log.Fatalf("Failed to load eBPF spec: %v", err)
+		log.Fatalf("Failed to attach trace_ip: %v", err)
 	}
+	tp_rcv.Close()
 
-	objects := struct {
-		IpRcv        *ebpf.Program `ebpf:"trace_ip_rcv"`
-		DevQueueXmit *ebpf.Program `ebpf:"trace_dev_queue_xmit"`
-		HistogramMap *ebpf.Map     `ebpf:"latency_histogram"`
-	}{}
-
-	if err := spec.LoadAndAssign(&objects, nil); err != nil {
-		log.Fatalf("Failed to load and assign eBPF objects: %v", err)
-	}
-	defer objects.HistogramMap.Close()
-	defer objects.IpRcv.Close()
-	defer objects.DevQueueXmit.Close()
-
-	// Attach the eBPF programs to kprobes
-	ipRcvLink, err := link.Kprobe("ip_rcv", objects.IpRcv, nil)
+	// Attach BPF programs to return tracepoint events
+	tp_ret, err := link.Tracepoint("net", "net_dev_queue", coll.Programs["trace_ip_return"], nil)
 	if err != nil {
-		log.Fatalf("Failed to attach ip_rcv kprobe: %v", err)
+		log.Fatalf("Failed to attach trace_ip_return: %v", err)
 	}
-	defer ipRcvLink.Close()
+	tp_ret.Close()
 
-	devQueueXmitLink, err := link.Kprobe("dev_queue_xmit", objects.DevQueueXmit, nil)
+	// Open BPF map
+	latencyMap := coll.Maps["latency_map"]
+	if latencyMap == nil {
+		log.Fatalf("Failed to find latency_map")
+	}
+
+	// Poll the BPF map for latency data
+	reader, err := perf.NewReader(latencyMap, 4096)
 	if err != nil {
-		log.Fatalf("Failed to attach dev_queue_xmit kprobe: %v", err)
+		log.Fatalf("Failed to create perf reader: %v", err)
 	}
-	defer devQueueXmitLink.Close()
+	defer reader.Close()
 
-	log.Println("eBPF programs successfully loaded and attached")
+	// Handle signals for graceful shutdown
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	// Collect data from the eBPF histogram map
+	// Goroutine to handle graceful shutdown on receiving a signal
+	go func() {
+		<-sig
+		// reader.Close()
+		tp_rcv.Close()
+		tp_ret.Close()
+		coll.Close()
+		os.Exit(0)
+	}()
+
 	go func() {
 		for {
-			var key struct {
-				SrcIP uint32
-				DstIP uint32
-			}
-			var latency uint64
-
-			iter := objects.HistogramMap.Iterate()
-			for iter.Next(&key, &latency) {
-				srcIP := ipToString(key.SrcIP)
-				dstIP := ipToString(key.DstIP)
-				srcPod := ipToPod(srcIP)
-				dstPod := ipToPod(dstIP)
-
-				// Convert latency from ns to seconds and observe the metric
-				networkLatency.WithLabelValues(srcPod, dstPod).Observe(float64(latency) / 1e9)
+			record, err := reader.Read()
+			if err != nil {
+				log.Printf("Failed to read from perf reader: %v", err)
+				continue
 			}
 
-			if err := iter.Err(); err != nil {
-				log.Printf("Error reading eBPF map: %v", err)
+			var event LatencyEvent
+			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
+				log.Printf("Failed to decode received data: %v", err)
+				continue
 			}
 
-			time.Sleep(10 * time.Second)
+			srcIP := fmt.Sprintf("%d.%d.%d.%d", byte(event.SrcIP>>24), byte(event.SrcIP>>16), byte(event.SrcIP>>8), byte(event.SrcIP))
+			dstIP := fmt.Sprintf("%d.%d.%d.%d", byte(event.DstIP>>24), byte(event.DstIP>>16), byte(event.DstIP>>8), byte(event.DstIP))
+			latencyHistogram.WithLabelValues(srcIP, dstIP).Observe(float64(event.Timestamp))
 		}
 	}()
 
-	// Register Prometheus metrics and serve HTTP
-	prometheus.MustRegister(networkLatency)
+	// Start Prometheus HTTP server
 	http.Handle("/metrics", promhttp.Handler())
-	log.Fatal(http.ListenAndServe(":8080", nil))
-}
-
-// ipToPod resolves an IP address to a Kubernetes pod name
-func ipToPod(ip string) string {
-	pods, err := k8sClient.CoreV1().Pods("").List(context.TODO(), v1.ListOptions{})
-	if err != nil {
-		log.Printf("Failed to list pods: %v", err)
-		return ip
-	}
-
-	for _, pod := range pods.Items {
-		if pod.Status.PodIP == ip {
-			return pod.Name
-		}
-	}
-
-	// Return IP if no pod is found
-	return ip
+	log.Fatal(http.ListenAndServe(":2112", nil))
 }

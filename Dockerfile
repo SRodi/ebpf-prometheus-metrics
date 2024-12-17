@@ -1,4 +1,4 @@
-FROM golang:1.22.7 as builder
+FROM golang:1.23.4 as builder
 
 WORKDIR /app
 
@@ -14,8 +14,8 @@ FROM ubuntu:22.04
 WORKDIR /root/
 
 COPY --from=builder /app/main .
-COPY bpf/xdp_ebpf.c ./bpf/
-COPY bpf/xdp_ebpf.o ./bpf/
+COPY bpf/latency.c ./bpf/
+COPY bpf/latency.o ./bpf/
 
 RUN apt-get update && apt-get install -y clang llvm iproute2 libbpf-dev
 
@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y clang llvm iproute2 libbpf-dev
 USER root
 
 # Export metrics port
-EXPOSE 8080
+EXPOSE 2112
 
 CMD ["./main"]
 
