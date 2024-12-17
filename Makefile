@@ -5,18 +5,25 @@ IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/ebpf-prometheus-metrics/latency:$(
 export IMAGE
 
 # Force make to always run these targets
-.PHONY: all build clean docker deploy delete
+.PHONY: all build load clean docker deploy delete
 
 all: build
 
-build:
+build: clean
 	clang -O2 -g -target bpf -c bpf/latency.c -o bpf/latency.o
 	go build -o main main.go
+
+load:
+	sudo bpftool prog load bpf/latency.o /sys/fs/bpf/latency autoattach
+
+dump:
+	sudo bpftool map dump name latency_map
 
 run: clean build
 	sudo ./main
 
 clean:
+	sudo rm -f /sys/fs/bpf/latency
 	rm -f main bpf/latency.o
 
 docker: build

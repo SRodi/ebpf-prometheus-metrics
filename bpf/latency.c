@@ -1,90 +1,126 @@
+#define __TARGET_ARCH_x86
 #include "vmlinux.h"
-// #include <linux/bpf.h>
-// #include <linux/if_ether.h>
-// #include <linux/ip.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_endian.h>
+#include <bpf/bpf_core_read.h>
 
-#define ETH_P_IP 0x0800
+#define ETH_P_IP 0x800
+
+struct ipv4_key {
+    __be32 src_ip;
+    __be32 dst_ip;
+    __sum16 check;
+    __u8 h_proto;
+};
 
 struct latency_t {
-    __u64 timestamp;
-    __u32 src_ip;
-    __u32 dst_ip;
+    __u64 timestamp_in;
+    __u64 latency;
 };
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
-    __type(key, __u32);
+    __type(key, struct ipv4_key);
     __type(value, struct latency_t);
 } latency_map SEC(".maps");
 
-static __inline __u16 bpf_htons(__u16 x) {
-    return __builtin_bswap16(x);
+static inline struct iphdr *get_iphdr(struct pt_regs *ctx) {
+    void* head;
+    u16 offset;
+    struct iphdr *iphr;
+    struct sk_buff *skb;
+    
+    // Get socket buffer
+    bpf_probe_read_kernel(&skb, sizeof(skb), &PT_REGS_PARM1(ctx));
+    
+    // Get head and offset
+    bpf_probe_read_kernel(&head, sizeof(head), &skb->head);
+    bpf_probe_read_kernel(&offset, sizeof(offset), &skb->network_header);
+
+    // Get IP header
+    iphr = (struct iphdr *)(head + offset);
+    if (!iphr) {
+        bpf_printk("Failed to get IP header\n");
+        return 0;
+    }
+    return iphr;
 }
 
-// create function to return the ip header
-static __always_inline struct iphdr *ip_hdr(struct __sk_buff *skb) {
-    // Get data and data_end
-    void *data_end = (void *)(long)skb->data_end;
-    void *data = (void *)(long)skb->data;
-    // Get ethernet header
-    struct ethhdr eth;
-    // Check if data is valid
-    if (data + sizeof(struct ethhdr) > data_end)
-        return 0;
-    // Read ethernet header
-    bpf_probe_read_kernel(&eth, sizeof(eth), data);
-    // Check if it is IP packet
-    if (eth.h_proto != bpf_htons(ETH_P_IP))
-        return 0;
-    // Get IP header
-    struct iphdr ip;
-    // Check if IP header is valid
-    if ((void *)data + sizeof(struct ethhdr) + sizeof(struct iphdr) > data_end)
-        return 0;
-    // Read IP header
-    bpf_probe_read_kernel(&ip, sizeof(ip), data + sizeof(struct ethhdr));
+static inline struct ipv4_key build_key( struct iphdr *iphr) {
+    // Get source and destination ip addresses
+    __be32 src, dst;
+    __sum16 check;
+    __u8 proto;
 
-    return &ip;
+    bpf_probe_read_kernel(&src, sizeof(src), &iphr->saddr);
+    bpf_probe_read_kernel(&dst, sizeof(dst), &iphr->daddr);
+    bpf_probe_read_kernel(&proto, sizeof(proto), &iphr->protocol);
+    bpf_probe_read_kernel(&proto, sizeof(proto), &iphr);
+
+    bpf_printk("IP src: %x, dst: %x, proto: %x\n", src, dst, proto);
+
+    // Initialize IPv4 key
+    struct ipv4_key key = {};
+    key.src_ip = src;
+    key.dst_ip = dst;
+    key.check = check;
+    key.h_proto = proto;
+
+    return key;
 }
 
-SEC("tracepoint/net/netif_receive_skb")
-int trace_ip(struct __sk_buff *skb) {
-    // Get IP header
-    struct iphdr ip = *ip_hdr(skb);
+static inline struct ipv4_key reverse_ipv4_key(struct ipv4_key key) {
+    struct ipv4_key reversed_key;
+    reversed_key.src_ip = key.dst_ip;
+    reversed_key.dst_ip = key.src_ip;
+    reversed_key.check = key.check;
+    reversed_key.h_proto = key.h_proto; // Assuming protocol remains the same
+    return reversed_key;
+}
 
-    // Set key as IP id    
-    __u32 key = ip.id;
-    // Initialize latency struct
+SEC("kprobe/ip_rcv")
+int trace_ip_rcv(struct pt_regs *ctx) {
+    // Get ip header
+    struct iphdr *iphr = get_iphdr(ctx);
+
+    // Get key
+    struct ipv4_key key = build_key(iphr);
+
+    // Initialize latency structure and set timestamp
     struct latency_t latency = {};
-    // Fill latency struct
-    latency.timestamp = bpf_ktime_get_ns();
-    latency.src_ip = ip.saddr;
-    latency.dst_ip = ip.daddr;
-    // Update latency map
+    latency.timestamp_in = bpf_ktime_get_ns();
+
+    // Update latency map with the new data
     bpf_map_update_elem(&latency_map, &key, &latency, BPF_ANY);
+
     return 0;
 }
 
-SEC("tp/net/net_dev_queue")
-int trace_ip_return(struct __sk_buff *skb) {
-    // Get IP header
-    struct iphdr ip = *ip_hdr(skb);
+SEC("kprobe/ip_output")
+int trace_ip_output(struct pt_regs *ctx) {
+    // Get ip header
+    struct iphdr *iphr = get_iphdr(ctx);
 
-    // Set key as IP id
-    __u32 key = ip.id;
-    // Declare latency struct
-    struct latency_t *latency;
-    // Get latency struct from map
-    latency = bpf_map_lookup_elem(&latency_map, &key);
+    // Get key
+    struct ipv4_key key = build_key(iphr);
+
+    // Reverse key
+    struct ipv4_key reversed_key = reverse_ipv4_key(key);
+
+    struct latency_t *latency = bpf_map_lookup_elem(&latency_map, &reversed_key);
     if (latency) {
         // Evaluate latency
-        __u64 delta = bpf_ktime_get_ns() - latency->timestamp;
+        __u64 delta = bpf_ktime_get_ns() - latency->timestamp_in;
+        // Update latency struct
+        latency->latency = delta;
+        // Update latency_map
+        bpf_map_update_elem(&latency_map, &reversed_key, latency, BPF_ANY);
         // Print latency
-        bpf_printk("src_ip: %x, dst_ip: %x, latency: %llu ns\n", latency->src_ip, latency->dst_ip, delta);
-        // Delete latency from map
-        bpf_map_delete_elem(&latency_map, &key);
+        bpf_printk("src_ip: %x, dst_ip: %x, latency: %llu ns\n", reversed_key.src_ip, reversed_key.dst_ip, latency->latency);
+        // // Delete latency from map
+        // bpf_map_delete_elem(&latency_map, &key);
     }
     return 0;
 }

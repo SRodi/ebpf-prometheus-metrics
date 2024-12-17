@@ -1,10 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"encoding/binary"
-	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
-	"github.com/cilium/ebpf/perf"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sys/unix"
@@ -23,25 +21,32 @@ const (
 	memLockLimit   = 1000 * 1024 * 1024 // 1GB
 )
 
-type LatencyEvent struct {
-	Timestamp uint64
-	SrcIP     uint32
-	DstIP     uint32
+type LatencyT struct {
+	TimestampIn uint64
+	Latency     uint64
+}
+
+type IPv4Key struct {
+	SrcIP  uint32
+	DstIP  uint32
+	HProto uint8
+	Check  uint16
+	// add padding to match the size of the struct in the BPF program
+	_ [1]byte
 }
 
 var (
-	latencyHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "packet_latency",
-			Help:    "Packet latency in nanoseconds",
-			Buckets: prometheus.LinearBuckets(0, 1000000, 10), // 10 buckets, each 1ms wide
+	Latency = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "packets_count",
+			Help: "Number of packets received",
 		},
 		[]string{"src_ip", "dst_ip"},
 	)
 )
 
 func init() {
-	prometheus.MustRegister(latencyHistogram)
+	prometheus.MustRegister(Latency)
 }
 
 func main() {
@@ -66,32 +71,24 @@ func main() {
 	}
 	defer coll.Close()
 
-	// Attach BPF programs to receive tracepoint events
-	tp_rcv, err := link.Tracepoint("net", "netif_receive_skb", coll.Programs["trace_ip"], nil)
+	// Attach BPF programs to kprobe receive events
+	tp_rcv, err := link.Kprobe("ip_rcv", coll.Programs["trace_ip_rcv"], &link.KprobeOptions{})
 	if err != nil {
 		log.Fatalf("Failed to attach trace_ip: %v", err)
 	}
-	tp_rcv.Close()
+	defer tp_rcv.Close()
 
-	// Attach BPF programs to return tracepoint events
-	tp_ret, err := link.Tracepoint("net", "net_dev_queue", coll.Programs["trace_ip_return"], nil)
+	// Attach BPF programs to kprobe return events
+	tp_ret, err := link.Kprobe("ip_output", coll.Programs["trace_ip_output"], &link.KprobeOptions{})
 	if err != nil {
-		log.Fatalf("Failed to attach trace_ip_return: %v", err)
+		log.Fatalf("Failed to attach trace_ip_output: %v", err)
 	}
-	tp_ret.Close()
 
 	// Open BPF map
 	latencyMap := coll.Maps["latency_map"]
 	if latencyMap == nil {
 		log.Fatalf("Failed to find latency_map")
 	}
-
-	// Poll the BPF map for latency data
-	reader, err := perf.NewReader(latencyMap, 4096)
-	if err != nil {
-		log.Fatalf("Failed to create perf reader: %v", err)
-	}
-	defer reader.Close()
 
 	// Handle signals for graceful shutdown
 	sig := make(chan os.Signal, 1)
@@ -100,7 +97,6 @@ func main() {
 	// Goroutine to handle graceful shutdown on receiving a signal
 	go func() {
 		<-sig
-		// reader.Close()
 		tp_rcv.Close()
 		tp_ret.Close()
 		coll.Close()
@@ -109,25 +105,31 @@ func main() {
 
 	go func() {
 		for {
-			record, err := reader.Read()
-			if err != nil {
-				log.Printf("Failed to read from perf reader: %v", err)
-				continue
-			}
+			var key IPv4Key
+			var value LatencyT
 
-			var event LatencyEvent
-			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
-				log.Printf("Failed to decode received data: %v", err)
-				continue
-			}
+			// Get data from the BPF_MAP_TYPE_HASH
+			iterator := latencyMap.Iterate()
 
-			srcIP := fmt.Sprintf("%d.%d.%d.%d", byte(event.SrcIP>>24), byte(event.SrcIP>>16), byte(event.SrcIP>>8), byte(event.SrcIP))
-			dstIP := fmt.Sprintf("%d.%d.%d.%d", byte(event.DstIP>>24), byte(event.DstIP>>16), byte(event.DstIP>>8), byte(event.DstIP))
-			latencyHistogram.WithLabelValues(srcIP, dstIP).Observe(float64(event.Timestamp))
+			for iterator.Next(&key, &value) {
+				srcIP := toIpV4(key.SrcIP)
+				dstIP := toIpV4(key.DstIP)
+				Latency.WithLabelValues(srcIP, dstIP).Set(float64(value.Latency))
+				// latencyHistogram.WithLabelValues(srcIP, dstIP).Observe(float64(value.TimestampIn))
+				if err := iterator.Err(); err != nil {
+					log.Fatalf("Failed to iterate over latency_map: %v", err)
+				}
+			}
 		}
 	}()
 
 	// Start Prometheus HTTP server
 	http.Handle("/metrics", promhttp.Handler())
 	log.Fatal(http.ListenAndServe(":2112", nil))
+}
+
+func toIpV4(ip uint32) string {
+	ipOut := make(net.IP, 4)                 // Create a 4-byte IP address
+	binary.LittleEndian.PutUint32(ipOut, ip) // Convert uint32 to byte slice in little-endian order
+	return ipOut.String()                    // Convert IP address to string format
 }
