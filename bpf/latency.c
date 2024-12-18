@@ -6,14 +6,6 @@
 
 #define ETH_P_IP 0x800
 
-struct ipv4_key {
-    __be32 src_ip;
-    __be32 dst_ip;
-    // Use skb->hash as identifier
-    __u32 id;
-    __u8 h_proto;
-};
-
 struct l3 {
     __be32 src_ip;
     __be32 dst_ip;
@@ -30,7 +22,7 @@ struct latency_t {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
-    __type(key, struct ipv4_key *);
+    __type(key, __u32);
     __type(value, struct latency_t);
 } latency_map SEC(".maps");
 
@@ -38,28 +30,6 @@ struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 4096); // Size of the ring buffer
 } events SEC(".maps");
-
-static inline struct ipv4_key build_key( struct iphdr *iphr, struct sk_buff *skb) {
-    // Get source and destination ip addresses
-    __be32 src, dst;
-    __u32 id;
-    __u8 proto;
-
-    bpf_probe_read_kernel(&src, sizeof(src), &iphr->saddr);
-    bpf_probe_read_kernel(&dst, sizeof(dst), &iphr->daddr);
-    bpf_probe_read_kernel(&id, sizeof(id), &skb->hash);
-    bpf_probe_read_kernel(&proto, sizeof(proto), &iphr->protocol);
-
-    // Initialize IPv4 key
-    struct ipv4_key key = {
-        .src_ip = src,
-        .dst_ip = dst,
-        .id = id,
-        .h_proto = proto
-    };
-
-    return key;
-}
 
 static inline struct l3 build_l3( struct iphdr *iphr, struct sk_buff *skb) {
     // Get source and destination ip addresses
@@ -115,7 +85,7 @@ int ip_rcv(struct pt_regs *ctx) {
     // Get the ip header
     struct iphdr *iphr = get_iphdr(skb);
     // Build the key
-    struct ipv4_key key = build_key(iphr, skb);
+    __u32 key = get_key(skb);
     // Build layer 3 struct
     struct l3 layer_3 = build_l3(iphr, skb);
 
@@ -138,7 +108,7 @@ int ip_rcv_finish(struct pt_regs *ctx) {
     // Get the ip header
     struct iphdr *iphr = get_iphdr(skb);
     // Build the key
-    struct ipv4_key key = build_key(iphr, skb);
+    __u32 key = get_key(skb);
 
     struct latency_t *latency = bpf_map_lookup_elem(&latency_map, &key);
     if (latency) {
