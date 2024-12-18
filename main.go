@@ -1,18 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
+	"fmt"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sys/unix"
 )
 
@@ -22,17 +22,18 @@ const (
 )
 
 type LatencyT struct {
-	TimestampIn uint64
-	Latency     uint64
+	TimestampIn  uint64
+	TimestampOut uint64
+	Delta        uint64
 }
 
 type IPv4Key struct {
 	SrcIP  uint32
 	DstIP  uint32
+	Id     uint32
 	HProto uint8
-	Check  uint16
 	// add padding to match the size of the struct in the BPF program
-	_ [1]byte
+	_ [3]byte
 }
 
 var (
@@ -72,22 +73,22 @@ func main() {
 	defer coll.Close()
 
 	// Attach BPF programs to kprobe receive events
-	tp_rcv, err := link.Kprobe("ip_rcv", coll.Programs["trace_ip_rcv"], &link.KprobeOptions{})
+	tp_rcv, err := link.Kprobe("ip_rcv", coll.Programs["ip_rcv"], &link.KprobeOptions{})
 	if err != nil {
 		log.Fatalf("Failed to attach trace_ip: %v", err)
 	}
 	defer tp_rcv.Close()
 
 	// Attach BPF programs to kprobe return events
-	tp_ret, err := link.Kprobe("ip_output", coll.Programs["trace_ip_output"], &link.KprobeOptions{})
+	tp_ret, err := link.Kprobe("ip_rcv_finish", coll.Programs["ip_rcv_finish"], &link.KprobeOptions{})
 	if err != nil {
 		log.Fatalf("Failed to attach trace_ip_output: %v", err)
 	}
 
-	// Open BPF map
-	latencyMap := coll.Maps["latency_map"]
-	if latencyMap == nil {
-		log.Fatalf("Failed to find latency_map")
+	// Set up ring buffer to read data from BPF program
+	reader, err := ringbuf.NewReader(coll.Maps["events"])
+	if err != nil {
+		log.Fatalf("Failed to get ring: %v", err)
 	}
 
 	// Handle signals for graceful shutdown
@@ -103,33 +104,36 @@ func main() {
 		os.Exit(0)
 	}()
 
-	go func() {
-		for {
-			var key IPv4Key
-			var value LatencyT
+	// Read and print the output from the eBPF program
+	var event struct {
+		TimestampIn  uint64
+		TimestampOut uint64
+		Delta        uint64
+	}
 
-			// Get data from the BPF_MAP_TYPE_HASH
-			iterator := latencyMap.Iterate()
+	for {
 
-			for iterator.Next(&key, &value) {
-				srcIP := toIpV4(key.SrcIP)
-				dstIP := toIpV4(key.DstIP)
-				Latency.WithLabelValues(srcIP, dstIP).Set(float64(value.Latency))
-				// latencyHistogram.WithLabelValues(srcIP, dstIP).Observe(float64(value.TimestampIn))
-				if err := iterator.Err(); err != nil {
-					log.Fatalf("Failed to iterate over latency_map: %v", err)
-				}
-			}
+		// Read data from the ring buffer
+		data, err := reader.Read()
+		if err != nil {
+			log.Fatalf("Failed to read from ring buffer: %v", err)
 		}
-	}()
 
-	// Start Prometheus HTTP server
-	http.Handle("/metrics", promhttp.Handler())
-	log.Fatal(http.ListenAndServe(":2112", nil))
+		if err := binary.Read(bytes.NewReader(data.RawSample), binary.LittleEndian, &event); err != nil {
+			log.Printf("Failed to parse ring event: %v", err)
+			continue
+		}
+
+		fmt.Printf("TimestampIn: %d, TimestampOut: %d, Delta: %d\n", event.TimestampIn, event.TimestampOut, event.Delta)
+	}
+
+	// // Start Prometheus HTTP server
+	// http.Handle("/metrics", promhttp.Handler())
+	// log.Fatal(http.ListenAndServe(":2112", nil))
 }
 
-func toIpV4(ip uint32) string {
-	ipOut := make(net.IP, 4)                 // Create a 4-byte IP address
-	binary.LittleEndian.PutUint32(ipOut, ip) // Convert uint32 to byte slice in little-endian order
-	return ipOut.String()                    // Convert IP address to string format
-}
+// func toIpV4(ip uint32) string {
+// 	ipOut := make(net.IP, 4)                 // Create a 4-byte IP address
+// 	binary.LittleEndian.PutUint32(ipOut, ip) // Convert uint32 to byte slice in little-endian order
+// 	return ipOut.String()                    // Convert IP address to string format
+// }
