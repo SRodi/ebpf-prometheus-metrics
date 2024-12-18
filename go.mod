@@ -7,6 +7,7 @@ toolchain go1.23.3
 require (
 	github.com/cilium/ebpf v0.16.0
 	github.com/prometheus/client_golang v1.20.5
+	golang.org/x/sys v0.26.0
 )
 
 require (
@@ -21,6 +22,5 @@ require (
 	golang.org/x/exp v0.0.0-20230224173230-c95f2b4c22f2 // indirect
 	golang.org/x/net v0.30.0 // indirect
 	golang.org/x/sync v0.8.0 // indirect
-	golang.org/x/sys v0.26.0 // indirect
 	google.golang.org/protobuf v1.35.1 // indirect
 )

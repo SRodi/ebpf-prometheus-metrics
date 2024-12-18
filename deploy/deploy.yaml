@@ -23,6 +23,7 @@ spec:
       containers:
         - name: ebpf-exporter
           image: $IMAGE
+          imagePullPolicy: Always
           securityContext:
             capabilities:
               add: ["CAP_NET_ADMIN", "CAP_SYS_ADMIN", "CAP_BPF"]
