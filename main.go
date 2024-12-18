@@ -5,32 +5,36 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sys/unix"
 )
 
 const (
 	bpfProgramPath = "./bpf/latency.o"
-	memLockLimit   = 1000 * 1024 * 1024 // 1GB
+	memLockLimit   = 100 * 1024 * 1024 // 100MB
 )
 
 type LatencyT struct {
 	TimestampIn  uint64
 	TimestampOut uint64
 	Delta        uint64
+	Layer3       L3
 }
 
-type IPv4Key struct {
+type L3 struct {
 	SrcIP  uint32
 	DstIP  uint32
-	Id     uint32
 	HProto uint8
 	// add padding to match the size of the struct in the BPF program
 	_ [3]byte
@@ -44,10 +48,19 @@ var (
 		},
 		[]string{"src_ip", "dst_ip"},
 	)
+	LatencyIstogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "latency_histogram",
+			Help:    "Latency histogram",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"src_ip", "dst_ip"},
+	)
 )
 
 func init() {
 	prometheus.MustRegister(Latency)
+	prometheus.MustRegister(LatencyIstogram)
 }
 
 func main() {
@@ -104,36 +117,67 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Read and print the output from the eBPF program
-	var event struct {
-		TimestampIn  uint64
-		TimestampOut uint64
-		Delta        uint64
-	}
+	go func() {
+		// Read and print the output from the eBPF program
+		var event LatencyT
 
-	for {
+		for {
 
-		// Read data from the ring buffer
-		data, err := reader.Read()
-		if err != nil {
-			log.Fatalf("Failed to read from ring buffer: %v", err)
+			// Read data from the ring buffer
+			data, err := reader.Read()
+			if err != nil {
+				log.Fatalf("Failed to read from ring buffer: %v", err)
+			}
+
+			if err := binary.Read(bytes.NewReader(data.RawSample), binary.LittleEndian, &event); err != nil {
+				log.Printf("Failed to parse ring event: %v", err)
+				continue
+			}
+
+			// Convert IP addresses to string format
+			srcIP := toIpV4(event.Layer3.SrcIP)
+			dstIP := toIpV4(event.Layer3.DstIP)
+
+			// Increment Prometheus metric
+			Latency.WithLabelValues(srcIP, dstIP).Inc()
+			LatencyIstogram.WithLabelValues(srcIP, dstIP).Observe(float64(event.Delta))
+
+			// Print the output
+			fmt.Printf("TimestampIn: %s, TimestampOut: %s, Delta: %d, SrcIP: %s, DstIP: %s, HProto: %s\n", timestampToString(event.TimestampIn), timestampToString(event.TimestampOut), event.Delta, srcIP, dstIP, protoToString(event.Layer3.HProto))
 		}
+	}()
 
-		if err := binary.Read(bytes.NewReader(data.RawSample), binary.LittleEndian, &event); err != nil {
-			log.Printf("Failed to parse ring event: %v", err)
-			continue
-		}
-
-		fmt.Printf("TimestampIn: %d, TimestampOut: %d, Delta: %d\n", event.TimestampIn, event.TimestampOut, event.Delta)
-	}
-
-	// // Start Prometheus HTTP server
-	// http.Handle("/metrics", promhttp.Handler())
-	// log.Fatal(http.ListenAndServe(":2112", nil))
+	// Start Prometheus HTTP server
+	http.Handle("/metrics", promhttp.Handler())
+	log.Fatal(http.ListenAndServe(":2112", nil))
 }
 
-// func toIpV4(ip uint32) string {
-// 	ipOut := make(net.IP, 4)                 // Create a 4-byte IP address
-// 	binary.LittleEndian.PutUint32(ipOut, ip) // Convert uint32 to byte slice in little-endian order
-// 	return ipOut.String()                    // Convert IP address to string format
-// }
+func toIpV4(ip uint32) string {
+	ipOut := make(net.IP, 4)                 // Create a 4-byte IP address
+	binary.LittleEndian.PutUint32(ipOut, ip) // Convert uint32 to byte slice in little-endian order
+	return ipOut.String()                    // Convert IP address to string format
+}
+
+func protoToString(protocol uint8) string {
+	switch protocol {
+	case 1:
+		return "ICMP"
+	case 2:
+		return "IGMP"
+	case 6:
+		return "TCP"
+	case 17:
+		return "UDP"
+	case 89:
+		return "OSPF"
+	default:
+		return "Unknown"
+	}
+}
+
+func timestampToString(timestamp uint64) string {
+	// Convert the timestamp to a time.Time object
+	t := time.Unix(0, int64(timestamp))
+	// Format the time.Time object to a human-readable string
+	return t.Format(time.RFC3339)
+}

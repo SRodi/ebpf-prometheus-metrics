@@ -15,10 +15,17 @@ struct ipv4_key {
     __u8 h_proto;
 };
 
+struct l3 {
+    __be32 src_ip;
+    __be32 dst_ip;
+    __u8 h_proto;
+};
+
 struct latency_t {
     __u64 timestamp_in;
     __u64 timestamp_out;
     __u64 delta;
+    struct l3 layer_3;
 };
 
 struct {
@@ -55,6 +62,33 @@ static inline struct ipv4_key build_key( struct iphdr *iphr, struct sk_buff *skb
     return key;
 }
 
+static inline struct l3 build_l3( struct iphdr *iphr, struct sk_buff *skb) {
+    // Get source and destination ip addresses
+    __be32 src, dst;
+    __u32 id;
+    __u8 proto;
+
+    bpf_probe_read_kernel(&src, sizeof(src), &iphr->saddr);
+    bpf_probe_read_kernel(&dst, sizeof(dst), &iphr->daddr);
+    bpf_probe_read_kernel(&proto, sizeof(proto), &iphr->protocol);
+
+    // Initialize IPv4 key
+    struct l3 layer_3 = {
+        .src_ip = src,
+        .dst_ip = dst,
+        .h_proto = proto
+    };
+
+    return layer_3;
+}
+
+static inline __u32 get_key(struct sk_buff *skb) {
+    __u32 id;
+    bpf_probe_read_kernel(&id, sizeof(id), &skb->hash);
+    return id;
+}
+
+
 // get the ip header from the skb
 static inline struct iphdr *get_iphdr(struct sk_buff *skb) {
     void* head;
@@ -75,16 +109,6 @@ static inline struct iphdr *get_iphdr(struct sk_buff *skb) {
     return iphr;
 }
 
-static inline struct ipv4_key reverse_ipv4_key(struct ipv4_key key) {
-    struct ipv4_key reversed_key;
-    reversed_key.src_ip = key.dst_ip;
-    reversed_key.dst_ip = key.src_ip;
-    // Keep the same id and h_proto
-    reversed_key.id = key.id;
-    reversed_key.h_proto = key.h_proto;
-    return reversed_key;
-}
-
 SEC("kprobe/ip_rcv")
 int ip_rcv(struct pt_regs *ctx) {
     // Get the socket buffer
@@ -93,10 +117,13 @@ int ip_rcv(struct pt_regs *ctx) {
     struct iphdr *iphr = get_iphdr(skb);
     // Build the key
     struct ipv4_key key = build_key(iphr, skb);
+    // Build layer 3 struct
+    struct l3 layer_3 = build_l3(iphr, skb);
 
     // Initialize latency structure and set timestamp
     struct latency_t latency = {
         .timestamp_in = bpf_ktime_get_ns(),
+        .layer_3 = layer_3
     };
 
     // Update latency map with the new data
@@ -116,13 +143,11 @@ int ip_rcv_finish(struct pt_regs *ctx) {
 
     struct latency_t *latency = bpf_map_lookup_elem(&latency_map, &key);
     if (latency) {
-        // Evaluate latency
-        __u64 delta = bpf_ktime_get_ns() - latency->timestamp_in;
         // Update latency struct
         latency->timestamp_out = bpf_ktime_get_ns();
-        latency->delta = delta;
+        latency->delta = ( latency->timestamp_out - latency->timestamp_in ) / 1000;
         // Print latency
-        bpf_printk("latency: %llu ns\n", delta);
+        bpf_printk("latency: %llu ms\n", latency->delta);
         // Send event to user space via ring buffer
         void *data = bpf_ringbuf_reserve(&events, sizeof(*latency), 0);
         if (data) {

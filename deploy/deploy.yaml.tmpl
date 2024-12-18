@@ -14,30 +14,41 @@ spec:
       labels:
         app: ebpf-network-latency
     spec:
+      initContainers:
+        - name: init-set-rlimit
+          image: busybox
+          command: ["sh", "-c", "ulimit -l 1073741824"]
+          securityContext:
+            privileged: true
       containers:
         - name: ebpf-exporter
           image: $IMAGE
           securityContext:
             capabilities:
-              add: ["NET_ADMIN", "SYS_ADMIN", "SYS_PTRACE"]
+              add: ["CAP_NET_ADMIN", "CAP_SYS_ADMIN", "CAP_BPF"]
             privileged: true
           volumeMounts:
             - mountPath: /sys
               name: sys
               readOnly: true
-            - mountPath: /proc
-              name: proc
-              readOnly: true
+            - mountPath: /sys/fs/bpf
+              name: bpf
+              readOnly: false
           ports:
-            - containerPort: 8080
+            - containerPort: 2112
               name: metrics
+          env:
+            - name: BPFTRACE_LOG_LEVEL
+              value: "debug"
+            - name: BPFOOL_DEBUG
+              value: "1"
       volumes:
         - name: sys
           hostPath:
             path: /sys
-        - name: proc
+        - name: bpf
           hostPath:
-            path: /proc
+            path: /sys/fs/bpf
 ---
 apiVersion: v1
 kind: Service
@@ -46,8 +57,8 @@ metadata:
 spec:
   ports:
     - name: metrics
-      port: 8080
-      targetPort: 8080
+      port: 2112
+      targetPort: 2112
   selector:
     app: ebpf-network-latency
 ---

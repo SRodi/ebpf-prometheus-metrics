@@ -125,7 +125,7 @@ scrape_configs:
     relabel_configs:
       - source_labels: [__meta_kubernetes_namespace]
         action: keep
-        regex: defaul
+        regex: default
 ```
 
 ## Test

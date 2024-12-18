@@ -31,7 +31,7 @@ docker: build
 	docker push $(IMAGE)
 
 docker-run:
-	docker run --cap-add=SYS_ADMIN  -p 8080:8080 $(IMAGE)
+	docker run --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --cap-add=BPF --ulimit memlock=1073741824:1073741824 -p 2112:2112 $(IMAGE)
 
 deploy:
 	envsubst < deploy/deploy.yaml.tmpl | kubectl apply -f -
