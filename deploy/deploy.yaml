@@ -43,6 +43,13 @@ spec:
               value: "debug"
             - name: BPFOOL_DEBUG
               value: "1"
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
       volumes:
         - name: sys
           hostPath:
