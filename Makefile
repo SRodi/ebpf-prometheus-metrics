@@ -5,8 +5,8 @@ ARCH=$(shell uname -m)
 IMAGE_TAG ?= $(shell git describe --tags --always)-$(ARCH)
 IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/ebpf-prometheus-metrics/latency:$(IMAGE_TAG)
 export IMAGE
-PLATFORM ?= $(if $(filter x86_64,$(ARCH)),linux/amd64,$(if $(filter aarch64,$(ARCH)),linux/arm64,unsupported))
-TARGETARCH ?= $(if $(filter x86_64,$(ARCH)),x86,$(if $(filter aarch64,$(ARCH)),arm64,unsupported))
+PLATFORM ?= $(if $(filter x86_64,$(ARCH)),linux/amd64,$(if $(filter arm64,$(ARCH)),linux/arm64,unsupported))
+TARGETARCH ?= $(if $(filter x86_64,$(ARCH)),x86,$(if $(filter arm64,$(ARCH)),arm64,unsupported))
 
 # Force make to always run these targets
 .PHONY: all build load dump clean docker docker-run deploy delete prometheus
