@@ -5,14 +5,16 @@ ARCH=$(shell uname -m)
 IMAGE_TAG ?= $(shell git describe --tags --always)-$(ARCH)
 IMAGE := $(IMAGE_REGISTRY)/$(IMAGE_NAMESPACE)/ebpf-prometheus-metrics/latency:$(IMAGE_TAG)
 export IMAGE
+PLATFORM ?= $(if $(filter x86_64,$(ARCH)),linux/amd64,$(if $(filter aarch64,$(ARCH)),linux/arm64,unsupported))
+TARGETARCH ?= $(if $(filter x86_64,$(ARCH)),x86,$(if $(filter aarch64,$(ARCH)),arm64,unsupported))
 
 # Force make to always run these targets
-.PHONY: all build load clean docker deploy delete
+.PHONY: all build load dump clean docker docker-run deploy delete prometheus
 
 all: build
 
 build: clean
-	clang -O2 -g -target bpf -c bpf/latency.c -o bpf/latency.o
+	docker buildx build --platform $(PLATFORM) --build-arg TARGETARCH=$(TARGETARCH) -t bpf-compile:$(TARGETARCH) -f docker/Dockerfile.builder . --output=type=local,dest=./
 	go build -o main main.go
 
 load:
@@ -29,8 +31,7 @@ clean:
 	rm -f main bpf/latency.o
 
 docker:
-	docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 -t $(IMAGE) -f docker/Dockerfile .
-	docker push $(IMAGE)
+	docker buildx build --platform $(PLATFORM) --build-arg TARGETARCH=$(TARGETARCH) -t $(IMAGE) -f docker/Dockerfile --push .
 
 docker-run:
 	docker run --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --cap-add=BPF --ulimit memlock=1073741824:1073741824 -p 2112:2112 $(IMAGE)
@@ -40,12 +41,6 @@ deploy:
 
 delete:
 	envsubst < deploy/deploy.yaml | kubectl delete -f -
-
-build-arm64:
-	docker buildx build --platform linux/arm64 --build-arg TARGETARCH=arm64 -t my-bpf-program:arm64 -f docker/Dockerfile.builder . --output=type=local,dest=./
-
-build-x86:
-	docker buildx build --platform linux/amd64 --build-arg TARGETARCH=x86 -t my-bpf-program:amd64 -f docker/Dockerfile.builder . --output=type=local,dest=./
 
 prometheus:
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
