@@ -1,48 +1,49 @@
-```sh
-# check tracing subsystems events available
-# https://blogs.oracle.com/linux/post/taming-tracepoints-in-the-linux-kernel
-sudo ls /sys/kernel/debug/tracing/events/net
+## Kernel Network Latency
+This program is an eBPF-based network latency monitoring tool that collects and exposes network packet latency metrics to Prometheus. It utilizes eBPF (Extended Berkeley Packet Filter) to attach probes to kernel functions related to packet reception and processing. The program captures timestamps at different stages of packet processing, calculates the latency, and records the source and destination IP addresses along with the protocol type. The collected data is then exposed as Prometheus metrics, which can be scraped and visualized using Prometheus and Grafana.
 
-# enable netif_receive_skb tracepoint
-sudo sh -c 'echo -n 1 > /sys/kernel/debug/tracing/events/net/netif_receive_skb/enable'
+The program sets up a ring buffer to read events from the eBPF program and processes these events in a separate goroutine. It converts the raw data into human-readable format and updates Prometheus metrics accordingly. The metrics include a gauge for the number of packets received and a histogram for the latency distribution. Additionally, the program starts an HTTP server to serve the Prometheus metrics endpoint, allowing Prometheus to scrape the metrics at regular intervals. This setup provides a powerful and efficient way to monitor network latency in real-time.
 
-# enable net_dev_queue tracepoint
-sudo sh -c 'echo -n 1 > /sys/kernel/debug/tracing/events/net/net_dev_queue/enable'
-```
+![Grafana Dashboard](./static/grafana.png)
 
 
-# xdp-prometheus
-The xdp-prometheus project is designed to collect eBPF metrics and expose them to Prometheus for monitoring. It includes the source code and deployment configuration necessary to build, run, and deploy the application. The project leverages eBPF programs to gather metrics at the kernel level and uses Prometheus to make these metrics accessible for monitoring and analysis.
+## BPF program Deescription
 
-The repository is structured with various files and directories, including a Dockerfile for building the Docker image, Kubernetes deployment configurations, Go module dependencies, and the main application code written in Go. The eBPF program source code is contained in xdp_ebpf.c, and its compiled output is in xdp_ebpf.o. The project requires Docker, Kubernetes, and Go 1.22.7 or higher to build and run.
+This program is an eBPF (extended Berkeley Packet Filter) program written in C. It is designed to measure the latency of IP packets as they are processed by the Linux kernel. Here's a step-by-step explanation of how it works:
 
-The [xdp_ebpf.c](bpf/xdp_ebpf.c) file contains an eBPF program designed for DDoS protection using XDP (eXpress Data Path). It includes necessary Linux kernel headers and defines constants for rate limiting, such as the maximum packets per second (THRESHOLD) and the time window in nanoseconds (TIME_WINDOW_NS). The program maintains a hash map (rate_limit_map) to track the rate limit for each source IP address, storing the last update timestamp and packet count within the time window. The ddos_protection function, marked with the SEC("xdp") section, processes incoming packets, starting by parsing the Ethernet header. It checks if the packet is an IP packet and ensures that the packet data is within bounds before proceeding with further processing. If the packet is not an IP packet or the data is out of bounds, it passes the packet without any action.
+1. Includes and Definitions:
+    - The program includes several headers required for eBPF programs.
+    - It defines a constant ETH_P_IP for the IP protocol.
 
-![Prometheus](static/ddos_simulation.png)
+2. Data Structures:
+    - struct l3: Holds layer 3 (network layer) information such as source and destination IP addresses and protocol.
+    - struct latency_t: Holds timestamps for when a packet is received and processed, the time difference (latency), and the layer 3 information.
 
-## Repository structure
-```
-  . 
-  ├── bpf
-  |  └── xdp_ebpf.c
-  ├── deploy 
-  |  └── deploy.yaml.tmpl
-  ├── Dockerfile
-  ├── go.mod
-  ├── go.sum
-  |── main.go
-  └── Makefile
-```
+3. Maps:
+    - latency_map: A hash map that stores latency information for packets, keyed by a unique identifier.
+    - events: A ring buffer used to send events (latency information) to user space.
 
-* deploy.yaml: Kubernetes deployment and service configuration.
-* Dockerfile: Instructions to build the Docker image.
-* go.mod: Go module dependencies.
-* go.sum: Go module dependency checksums.
-* main: Directory containing the main application code.
-* main.go: Entry point for the Go application.
-* Makefile: Makefile for building and managing the project.
-* xdp_ebpf.c: eBPF program source code.
-* xdp_ebpf.o: Compiled eBPF program.
+
+4. Helper Functions:
+    - build_l3: Constructs an l3 structure from an IP header and socket buffer.
+    - get_key: Extracts a unique key (hash) from a socket buffer.
+    - get_iphdr: Retrieves the IP header from a socket buffer.
+
+5. Kprobe Handlers:
+    - ip_rcv: This function is attached to the ip_rcv kernel function. It:
+      * Retrieves the socket buffer and IP header.
+      * Builds a unique key and layer 3 structure.
+      * Initializes a latency_t structure with the current timestamp and layer 3 information.
+      * Updates the latency_map with this information.
+    - ip_rcv_finish: This function is attached to the ip_rcv_finish kernel function. It:
+      * Retrieves the socket buffer and IP header.
+      * Looks up the corresponding latency_t structure in the latency_map using the unique key.
+      * If found, it updates the timestamp_out and calculates the latency.
+      * Prints the latency and sends the information to user space via the ring buffer.
+      * Deletes the entry from the latency_map.
+
+6. License:
+    - The program specifies that it is licensed under the GPL.
+    Overall, this eBPF program measures the time taken for IP packets to be processed by the kernel and sends this latency information to user space.
 
 ## Prerequisites
 
@@ -66,7 +67,7 @@ The [xdp_ebpf.c](bpf/xdp_ebpf.c) file contains an eBPF program designed for DDoS
 3. **Clone the repository**:
     ```sh
     git clone https://github.com/srodi/ebpf-prometheus-metrics.git
-    cd ebpf-ebpf-prometheus-metrics
+    cd ebpf-prometheus-metrics
     ```
 4. **Add the correct include path**
     If the header files `types.h` are located in a different directory than `/usr/include/asm`, you can add the include path manually via environment variable `C_INCLUDE_PATH`:
@@ -107,7 +108,7 @@ make docker
 To deploy the application to a Kubernetes cluster, apply the [deploy.yaml](deploy.yaml) file:
 
 ```sh
-kubectl apply -f deploy.yaml
+make deploy
 ```
 
 ## Accessing Metrics
@@ -128,40 +129,16 @@ scrape_configs:
         regex: default
 ```
 
-## Test
-
-To test a DDoS attack, you can use `hping` tool, here is a script
+If you do not have Prometheus installed, simply use this target:
 
 ```sh
-#!/bin/bash
-TARGET_IP=10.244.1.166 # update this!!
-TARGET_PORT=80
-INTERFACE="eth0"
-
-echo "sending 1000 packets to $TARGET_IP"
-hping3 --flood --count 1000 --interface $INTERFACE --destport $TARGET_PORT --syn $TARGET_IP
-echo "done sending 1000"
+make prometheus
 ```
 
-## Troubleshooting
+## Grafana Dashboard
+The json template for Grafana dashboard is found at [grafana/dashboard.json](./grafana/dashboard.json).
 
-Try attaching the XDP program manually if `make run` fails with the following message:
-
-```sh
-2024/11/28 07:27:49 failed to attach eBPF program to interface eth0: failed to attach link: create link: operation not supported make: *** [Makefile:16: run] Error 1
-```
-
-If you're encountering an issue with attaching an XDP program to the eth0 interface with a similar error to the following, this is due to Large Receive Offload (LRO) being enabled.
-
-```sh
-$ sudo ip link set dev eth0 xdp obj bpf/xdp_ebpf.o sec xdp
-Error: hv_netvsc: XDP: not support LRO.
-```
-The error message indicates that the hv_netvsc driver does not support XDP when LRO is enabled. To resolve this issue, you need to disable LRO on the eth0 interface before attaching the XDP program. You can do this using the ethtool command:
-
-```sh
-sudo ethtool -K eth0 lro off
-```
+> Note: Grafana is already deployed as part of `prometheus-community/kube-prometheus-stack` Helm chart. So if you deployed Prometheus with `make prometheus`, you can simply port-forward Grafana and access the UI. From the UI you will be able to create a new dashboard by importing the json mentioned above.
 
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details.

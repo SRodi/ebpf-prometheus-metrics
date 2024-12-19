@@ -47,6 +47,6 @@ build-arm64:
 build-x86:
 	docker buildx build --platform linux/amd64 --build-arg TARGETARCH=x86 -t my-bpf-program:amd64 -f docker/Dockerfile.builder . --output=type=local,dest=./
 
-helm:
+prometheus:
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-	helm upgrade kube-prometheus-stack-1734561303 prometheus-community/kube-prometheus-stack --values deploy/prom-values.yaml
+	helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack --values deploy/prom-values.yaml
