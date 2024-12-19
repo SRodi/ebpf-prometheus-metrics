@@ -1,9 +1,9 @@
-FROM --platform=$BUILDPLATFORM golang:1.23.4-alpine as builder
+FROM --platform=$BUILDPLATFORM golang:1.23.4-alpine AS builder
 
 WORKDIR /app
 
 COPY bpf/latency.o ./bpf/
-COPY go.mod go.sum main.go .
+COPY go.mod go.sum main.go ./
 
 RUN go mod download
 RUN go build -o main .
