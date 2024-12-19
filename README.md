@@ -94,6 +94,10 @@ To run the project locally, use:
 make run
 ```
 
+# Containerization
+
+For the next steps you need Docker, Kubectl (with access to a Kubernetes cluster), and Helm installed on your system.
+
 ## Create docker image
 To create a docker image
 
@@ -111,12 +115,14 @@ To deploy the application to a Kubernetes cluster, apply the [deploy.yaml](deplo
 make deploy
 ```
 
-## Accessing Metrics
-Once deployed, the metrics will be exposed on port 8080 of the xdp-prometheus service. You can access them using Prometheus by configuring a scrape job for the service.
+## Prometheus Metrics
+Once deployed to Kubernetes, the metrics will be exposed on port `2112` of the `ebpf-network-latency` service. The metrics exposed are `packets_count` and `latency_histogram*`. If you do not have Prometheus installed, simply use this target:
 
-![Prometheus](static/prometheus.png)
+```sh
+make prometheus
+```
 
-If Prometheus is not configured to scrape from the `default` namespace, a job needs to be added to Prometheus `scrape_config`:
+If you are already running Prometheus, you can access the metrics by configuring a scrape job for the service. If Prometheus is not configured to scrape from the `default` namespace, a job needs to be added to Prometheus `scrape_config`:
 
 ```yaml
 scrape_configs:
@@ -127,12 +133,6 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_namespace]
         action: keep
         regex: default
-```
-
-If you do not have Prometheus installed, simply use this target:
-
-```sh
-make prometheus
 ```
 
 ## Grafana Dashboard
