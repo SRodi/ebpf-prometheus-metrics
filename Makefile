@@ -28,7 +28,7 @@ run: clean build
 
 clean:
 	sudo rm -f /sys/fs/bpf/latency
-	rm -f main bpf/latency.o
+	rm -rf main bpf/latency.o ./build
 
 docker:
 	docker buildx build --platform $(PLATFORM) --build-arg TARGETARCH=$(TARGETARCH) -t $(IMAGE) -f docker/Dockerfile --push .
@@ -45,3 +45,6 @@ delete:
 prometheus:
 	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 	helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack --values deploy/prom-values.yaml
+
+x-compile:
+	docker buildx build --platform=linux/amd64 --build-arg TARGETARCH=x86_64 -t bpf-compile:latest -f docker/Dockerfile.xcompile . --output=type=local,dest=./build/

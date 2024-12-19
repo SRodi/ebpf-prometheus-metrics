@@ -1,0 +1,37 @@
+# Base image
+FROM ubuntu:24.04 AS builder
+
+# Set default architecture (can be overridden during build time)
+ARG TARGET_ARCH=x86_64
+ENV TARGET_ARCH=${TARGET_ARCH}
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang llvm libelf-dev gcc-aarch64-linux-gnu linux-headers-generic \
+    gcc-13 libbpf-dev qemu-user-static binfmt-support \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Enable qemu for cross-compilation
+RUN update-binfmts --enable qemu-aarch64
+
+# Work directory
+WORKDIR /src
+
+# Copy source code
+COPY bpf /src/bpf
+
+# Conditional compilation for multiple architectures
+RUN if [ "${TARGET_ARCH}" = "x86_64" ]; then \
+        clang -target bpf -D__TARGET_ARCH_x86 -O2 -c bpf/latency.c -o bpf/latency.o; \
+    elif [ "${TARGET_ARCH}" = "arm64" ]; then \
+        clang -target bpf -D__TARGET_ARCH_arm64 -O2 -c bpf/latency.c -o bpf/latency.o; \
+    else \
+        echo "Unsupported architecture: ${TARGET_ARCH}" && exit 1; \
+    fi
+
+# Final stage
+FROM scratch AS final
+ARG TARGET_ARCH=x86_64
+ENV TARGET_ARCH=${TARGET_ARCH}
+# Copy the compiled object file based on architecture
+COPY --from=builder /src/bpf/latency.o /bpf/latency-"${TARGET_ARCH}".o
