@@ -1,3 +1,5 @@
+[![Test BPF program compile/load/attach on Ubuntu](https://github.com/SRodi/ebpf-prometheus-metrics/actions/workflows/test-bpf.yml/badge.svg)](https://github.com/SRodi/ebpf-prometheus-metrics/actions/workflows/test-bpf.yml)
+
 ## Kernel Network Latency
 This program is an eBPF-based network latency monitoring tool that collects and exposes network packet latency metrics to Prometheus. It utilizes eBPF (Extended Berkeley Packet Filter) to attach probes to kernel functions related to packet reception and processing. The program captures timestamps at different stages of packet processing, calculates the latency, and records the source and destination IP addresses along with the protocol type. The collected data is then exposed as Prometheus metrics, which can be scraped and visualized using Prometheus and Grafana.
 

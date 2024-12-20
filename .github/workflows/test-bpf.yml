@@ -44,7 +44,7 @@ jobs:
       run: make load
 
     - name: Check if BPF program is attached
-      run: sudo bpftool prog show pinned /sys/fs/bpf/latency
+      run: sudo bpftool prog show name ip_rcv
 
     - name: Dump BPF map
       run: make dump
