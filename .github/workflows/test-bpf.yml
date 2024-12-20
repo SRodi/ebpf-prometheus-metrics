@@ -1,0 +1,53 @@
+name: Test BPF program compile/load/attach on Ubuntu
+
+on: [push, pull_request]
+
+jobs:
+  bpf_test:
+    runs-on: ubuntu-latest
+
+    env:
+      C_INCLUDE_PATH: /usr/include/x86_64-linux-gnu
+      IFACE: lo
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up BPF toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install clang llvm libbpf-dev make linux-headers-$(uname -r) -y
+        find /usr/include -name 'types.h'
+
+    - name: install go
+      uses: actions/setup-go@v2
+      with:
+        go-version: '1.23.3'
+
+    - name: Install docker
+      run: |
+        sudo apt-get update
+        sudo apt-get install apt-transport-https ca-certificates curl software-properties-common -y
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+        sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+        sudo apt-get update
+        sudo apt-get install docker-ce -y
+        sudo usermod -aG docker $USER
+        sudo systemctl enable docker
+        sudo systemctl start docker
+
+    - name: Test build BPF program
+      run: make build
+
+    - name: Test load BPF program
+      run: make load
+
+    - name: Check if BPF program is attached
+      run: sudo bpftool prog show name ip_rcv
+
+    - name: Dump BPF map
+      run: make dump
+
+    - name: Test cleanup
+      run: make clean
