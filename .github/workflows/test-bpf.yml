@@ -23,7 +23,7 @@ jobs:
     - name: install go
       uses: actions/setup-go@v2
       with:
-        go-version: '1.16'
+        go-version: '1.23.3'
 
     - name: Install docker
       run: |
@@ -37,11 +37,14 @@ jobs:
         sudo systemctl enable docker
         sudo systemctl start docker
 
+    - name: Test build BPF program
+      run: make build
+
     - name: Test load BPF program
       run: make load
 
     - name: Check if BPF program is attached
-      run: bpftool prog show pinned /sys/fs/bpf/latency
+      run: sudo bpftool prog show pinned /sys/fs/bpf/latency
 
     - name: Dump BPF map
       run: make dump
