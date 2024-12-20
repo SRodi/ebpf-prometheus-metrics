@@ -1,6 +1,13 @@
 name: Test BPF program compile/load/attach on Ubuntu
 
-on: [push, pull_request]
+on:
+  merge_group:
+  pull_request:
+    branches: [master]
+    types:
+      - opened
+      - edited
+      - reopened
 
 jobs:
   bpf_test:

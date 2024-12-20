@@ -34,7 +34,6 @@ struct {
 static inline struct l3 build_l3( struct iphdr *iphr, struct sk_buff *skb) {
     // Get source and destination ip addresses
     __be32 src, dst;
-    __u32 id;
     __u8 proto;
 
     bpf_probe_read_kernel(&src, sizeof(src), &iphr->saddr);
@@ -62,7 +61,6 @@ static inline __u32 get_key(struct sk_buff *skb) {
 static inline struct iphdr *get_iphdr(struct sk_buff *skb) {
     void* head;
     u16 offset;
-    u32 hash;
     struct iphdr *iphr;
 
     // Get the network header
@@ -105,8 +103,6 @@ SEC("kprobe/ip_rcv_finish")
 int ip_rcv_finish(struct pt_regs *ctx) {
     // Get the socket buffer
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM3(ctx);
-    // Get the ip header
-    struct iphdr *iphr = get_iphdr(skb);
     // Build the key
     __u32 key = get_key(skb);
 

@@ -41,14 +41,14 @@ type L3 struct {
 }
 
 var (
-	Latency = prometheus.NewGaugeVec(
+	PacketsCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "packets_count",
 			Help: "Number of packets received",
 		},
 		[]string{"src_ip", "dst_ip"},
 	)
-	LatencyIstogram = prometheus.NewHistogramVec(
+	LatencyHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "latency_histogram",
 			Help:    "Latency histogram",
@@ -59,8 +59,8 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(Latency)
-	prometheus.MustRegister(LatencyIstogram)
+	prometheus.MustRegister(PacketsCount)
+	prometheus.MustRegister(LatencyHistogram)
 }
 
 func main() {
@@ -139,8 +139,8 @@ func main() {
 			dstIP := toIpV4(event.Layer3.DstIP)
 
 			// Increment Prometheus metric
-			Latency.WithLabelValues(srcIP, dstIP).Inc()
-			LatencyIstogram.WithLabelValues(srcIP, dstIP).Observe(float64(event.Delta))
+			PacketsCount.WithLabelValues(srcIP, dstIP).Inc()
+			LatencyHistogram.WithLabelValues(srcIP, dstIP).Observe(float64(event.Delta))
 
 			// Print the output
 			fmt.Printf("TimestampIn: %s, TimestampOut: %s, Delta: %d, SrcIP: %s, DstIP: %s, HProto: %s\n", timestampToString(event.TimestampIn), timestampToString(event.TimestampOut), event.Delta, srcIP, dstIP, protoToString(event.Layer3.HProto))
