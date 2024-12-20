@@ -22,9 +22,9 @@ COPY bpf /src/bpf
 
 # Conditional compilation for multiple architectures
 RUN if [ "${TARGET_ARCH}" = "x86_64" ]; then \
-        clang -target bpf -D__TARGET_ARCH_x86 -O2 -c bpf/latency.c -o bpf/latency.o; \
+        clang -target bpf -D__TARGET_ARCH_x86 -O2 -g -c bpf/latency.c -o bpf/latency.o; \
     elif [ "${TARGET_ARCH}" = "arm64" ]; then \
-        clang -target bpf -D__TARGET_ARCH_arm64 -O2 -c bpf/latency.c -o bpf/latency.o; \
+        clang -target bpf -D__TARGET_ARCH_arm64 -O2 -g -c bpf/latency.c -o bpf/latency.o; \
     else \
         echo "Unsupported architecture: ${TARGET_ARCH}" && exit 1; \
     fi
